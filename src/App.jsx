@@ -1,20 +1,37 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
-  Clock, Target, AlertTriangle, CheckCircle2, Play, Pause, 
+  Target, AlertTriangle, CheckCircle2, Play, Pause, 
   RotateCcw, Plus, Trash2, Flame, Globe, Crosshair,
   BrainCircuit, Skull, ShieldAlert, Activity, BellRing, Maximize,
-  Smartphone, BarChart3, XCircle
+  Smartphone, BarChart3
 } from 'lucide-react';
-import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
-import { getFirestore, collection, doc, setDoc, onSnapshot, deleteDoc, query } from 'firebase/firestore';
 
-// --- FIREBASE SETUP ---
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'chronos-war-room';
+// === 🛑 PASTE YOUR GOOGLE GEMINI API KEY HERE 🛑 ===
+// Get one for free at: https://aistudio.google.com/
+const GEMINI_API_KEY = ""; 
+
+// --- Custom Hook for Local Storage ---
+function useLocalStorage(key, initialValue) {
+  const [storedValue, setStoredValue] = useState(() => {
+    try {
+      const item = window.localStorage.getItem(key);
+      return item ? JSON.parse(item) : initialValue;
+    } catch (error) {
+      console.error(error);
+      return initialValue;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(key, JSON.stringify(storedValue));
+    } catch (error) {
+      console.error(error);
+    }
+  }, [key, storedValue]);
+
+  return [storedValue, setStoredValue];
+}
 
 // --- TRANSLATIONS ---
 const TRANSLATIONS = {
@@ -39,7 +56,6 @@ const TRANSLATIONS = {
     aiAnalyzeBtn: "SUBMIT FOR ANALYSIS",
     aiAnalyzing: "ANALYZING YOUR EXCUSES...",
     sessionsCompleted: "Drills Survived",
-    loginWait: "Establishing secure connection...",
     permissionsRequired: "Enable Notifications",
     permissionsDesc: "We need notification access to track you. Do not hide.",
     grantAccess: "GRANT ACCESS",
@@ -75,7 +91,6 @@ const TRANSLATIONS = {
     aiAnalyzeBtn: "بینێرە بۆ شیکردنەوە",
     aiAnalyzing: "شیکردنەوەی بیانووەکانت...",
     sessionsCompleted: "ڕاهێنانە تەواوکراوەکان",
-    loginWait: "پەیوەندی ئاسایش دادەمەزرێت...",
     permissionsRequired: "ئاگادارکردنەوەکان چالاک بکە",
     permissionsDesc: "پێویستمان بە دەسەڵاتی ئاگادارکردنەوەیە بۆ چاودێریکردنت. خۆت مەشێرەوە.",
     grantAccess: "پێدانی دەسەڵات",
@@ -107,23 +122,6 @@ const QUOTES = {
   ]
 };
 
-// --- API HELPER FOR AI ---
-const apiKey = ""; 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-async function fetchWithRetry(url, options, retries = 5) {
-  const delays = [1000, 2000, 4000, 8000, 16000];
-  for (let i = 0; i < retries; i++) {
-    try {
-      const response = await fetch(url, options);
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-      return await response.json();
-    } catch (error) {
-      if (i === retries - 1) throw error;
-      await sleep(delays[i]);
-    }
-  }
-}
-
 // --- AUDIO ALARM ---
 const playHarshAlarm = () => {
   try {
@@ -148,34 +146,40 @@ const playHarshAlarm = () => {
 };
 
 export default function App() {
-  const [user, setUser] = useState(null);
+  // --- Persistent Local State ---
+  const [lang, setLang] = useLocalStorage('warroom_lang', 'en');
+  const [tasks, setTasks] = useLocalStorage('warroom_tasks', []);
+  const [dailyStats, setDailyStats] = useLocalStorage('warroom_stats', { date: new Date().toDateString(), drills: 0 });
+  const [screenTime, setScreenTime] = useLocalStorage('warroom_screentime', { social: "", video: "", game: "" });
+  
+  // --- UI & Timer State ---
   const [activeTab, setActiveTab] = useState('dash'); 
-  const [lang, setLang] = useState('en');
-  const [tasks, setTasks] = useState([]);
   const [newTask, setNewTask] = useState("");
-  const [drillsCompleted, setDrillsCompleted] = useState(0);
   const [timeLeft, setTimeLeft] = useState(25 * 60);
   const [isTimerRunning, setIsTimerRunning] = useState(false);
   const [timerMode, setTimerMode] = useState('focus'); 
   const [currentTime, setCurrentTime] = useState(new Date());
   
-  // AI & Screen Time State
+  // --- AI State ---
   const [aiInput, setAiInput] = useState("");
   const [aiResponse, setAiResponse] = useState("");
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [quote, setQuote] = useState('');
-  const [screenTime, setScreenTime] = useState({ social: "", video: "", game: "" });
   const [toxicityReport, setToxicityReport] = useState("");
   
-  // System State
+  // --- System State ---
   const [notificationsGranted, setNotificationsGranted] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  
-  // Toast State
   const [toasts, setToasts] = useState([]);
 
   const t = TRANSLATIONS[lang];
   const isRTL = lang === 'ku';
+
+  // --- Date Check for Resetting Stats ---
+  useEffect(() => {
+    if (dailyStats.date !== new Date().toDateString()) {
+      setDailyStats({ date: new Date().toDateString(), drills: 0 });
+    }
+  }, [dailyStats, setDailyStats]);
 
   // --- Toast Manager ---
   const showToast = useCallback((message, type = 'error') => {
@@ -207,68 +211,19 @@ export default function App() {
     }
   }, []);
 
-  // --- Auth Init ---
+  // --- Initialization ---
   useEffect(() => {
-    const initAuth = async () => {
-      try {
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-          await signInWithCustomToken(auth, __initial_auth_token);
-        } else {
-          await signInAnonymously(auth);
-        }
-      } catch (err) {
-        console.error("Auth failed:", err);
-      }
-    };
-    initAuth();
-    const unsubscribe = onAuthStateChanged(auth, setUser);
-    
-    // Check existing notification permission
     if ("Notification" in window && Notification.permission === "granted") {
       setNotificationsGranted(true);
     }
-    return () => unsubscribe();
-  }, []);
-
-  // --- Firebase Data Syncing ---
-  useEffect(() => {
-    if (!user) return;
-    const tasksRef = collection(db, 'artifacts', appId, 'users', user.uid, 'tasks');
-    const unsubTasks = onSnapshot(query(tasksRef), (snapshot) => {
-      const fetchedTasks = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      fetchedTasks.sort((a, b) => (a.completed === b.completed ? 0 : a.completed ? 1 : -1));
-      setTasks(fetchedTasks);
-    }, (err) => console.error("Tasks Error:", err));
-
-    const statsRef = collection(db, 'artifacts', appId, 'users', user.uid, 'stats');
-    const unsubStats = onSnapshot(statsRef, (snapshot) => {
-      snapshot.docs.forEach(doc => {
-        if (doc.id === 'daily') {
-          const data = doc.data();
-          if (data.date === new Date().toDateString()) {
-            setDrillsCompleted(data.drills || 0);
-          } else {
-            setDoc(doc.ref, { date: new Date().toDateString(), drills: 0 }, { merge: true });
-            setDrillsCompleted(0);
-          }
-        }
-      });
-    }, (err) => console.error("Stats Error:", err));
-
-    return () => { unsubTasks(); unsubStats(); };
-  }, [user]);
-
-  // --- Clock & Quotes ---
-  useEffect(() => {
     const currentQuotes = QUOTES[lang];
     setQuote(currentQuotes[Math.floor(Math.random() * currentQuotes.length)]);
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, [lang]);
 
-  // --- Timer & Tab Switch Detection (Crucial Feature) ---
+  // --- Timer & Tab Switch Detection ---
   useEffect(() => {
-    // Tab visibility logic
     const handleVisibilityChange = () => {
       if (document.hidden && isTimerRunning && timerMode === 'focus') {
         sendPushNotification(t.appTitle, t.weaknessDetected);
@@ -278,10 +233,9 @@ export default function App() {
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
-    // Timer logic
     let interval = null;
     if (isTimerRunning && timeLeft > 0) {
-      interval = setInterval(() => setTimeLeft(t => t - 1), 1000);
+      interval = setInterval(() => setTimeLeft(prev => prev - 1), 1000);
     } else if (timeLeft === 0 && isTimerRunning) {
       setIsTimerRunning(false);
       handleTimerComplete();
@@ -293,15 +247,12 @@ export default function App() {
     };
   }, [isTimerRunning, timeLeft, timerMode, t, sendPushNotification, showToast]);
 
-  const handleTimerComplete = async () => {
+  const handleTimerComplete = () => {
     playHarshAlarm();
     if (timerMode === 'focus') {
       sendPushNotification(t.appTitle, t.drillComplete);
       showToast(t.drillComplete, "success");
-      if (user) {
-        const dailyRef = doc(db, 'artifacts', appId, 'users', user.uid, 'stats', 'daily');
-        await setDoc(dailyRef, { date: new Date().toDateString(), drills: drillsCompleted + 1 }, { merge: true });
-      }
+      setDailyStats(prev => ({ ...prev, drills: prev.drills + 1 }));
       setTimerMode('break');
       setTimeLeft(5 * 60);
     } else {
@@ -313,37 +264,53 @@ export default function App() {
   };
 
   // --- Actions ---
-  const addTask = async (e) => {
+  const addTask = (e) => {
     e.preventDefault();
-    if (!newTask.trim() || !user) return;
-    const taskRef = doc(db, 'artifacts', appId, 'users', user.uid, 'tasks', Date.now().toString());
-    await setDoc(taskRef, { text: newTask, completed: false, createdAt: Date.now() });
+    if (!newTask.trim()) return;
+    setTasks([...tasks, { id: Date.now().toString(), text: newTask, completed: false }]);
     setNewTask("");
   };
 
-  const toggleTask = async (task) => {
-    if (!user) return;
-    const taskRef = doc(db, 'artifacts', appId, 'users', user.uid, 'tasks', task.id);
-    await setDoc(taskRef, { completed: !task.completed }, { merge: true });
+  const toggleTask = (id) => {
+    setTasks(tasks.map(t => t.id === id ? { ...t, completed: !t.completed } : t));
   };
 
-  const deleteTask = async (taskId) => {
-    if (!user) return;
-    const taskRef = doc(db, 'artifacts', appId, 'users', user.uid, 'tasks', taskId);
-    await deleteDoc(taskRef);
+  const deleteTask = (id) => {
+    setTasks(tasks.filter(t => t.id !== id));
   };
 
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().catch(err => {
-        showToast("Fullscreen restricted by browser.", "warning");
-      });
-      setIsFullscreen(true);
+      document.documentElement.requestFullscreen().catch(() => showToast("Fullscreen restricted by browser.", "warning"));
     } else {
-      if (document.exitFullscreen) {
-        document.exitFullscreen();
-        setIsFullscreen(false);
-      }
+      if (document.exitFullscreen) document.exitFullscreen();
+    }
+  };
+
+  // --- AI API Helper ---
+  const callGeminiAPI = async (prompt, systemInstruction) => {
+    if (!GEMINI_API_KEY) {
+      showToast("API Key Missing! Add it to App.jsx to use AI features.", "error");
+      return "ERROR: Missing API Key. Go to App.jsx and add your GEMINI_API_KEY.";
+    }
+    
+    const payload = {
+      contents: [{ parts: [{ text: prompt }] }],
+      systemInstruction: { parts: [{ text: systemInstruction }] }
+    };
+
+    try {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await response.json();
+      if (data.error) throw new Error(data.error.message);
+      return data.candidates?.[0]?.content?.parts?.[0]?.text || "Failure.";
+    } catch (err) {
+      console.error(err);
+      return "Connection failed. Check API Key or Network.";
     }
   };
 
@@ -362,28 +329,13 @@ export default function App() {
     Social Media: ${screenTime.social} hrs
     Video/Streaming: ${screenTime.video} hrs
     Gaming: ${screenTime.game} hrs
-    Total: ${total} hrs.
-    
-    Act as a brutal, military-style discipline coach. Tear apart their screen time usage. Explain the long term damage this is doing to their life, brain, and goals. Give them a Toxicity Score out of 100.
-    Respond entirely in ${lang === 'en' ? 'English' : 'Kurdish Sorani'}. Keep it to 3 harsh paragraphs.`;
+    Total: ${total} hrs.`;
 
-    const payload = {
-      contents: [{ parts: [{ text: prompt }] }],
-      systemInstruction: { parts: [{ text: "You are an aggressive discipline coach." }] }
-    };
+    const systemPrompt = `Act as a brutal, military-style discipline coach. Tear apart their screen time usage. Explain the long term damage this is doing to their life, brain, and goals. Give them a Toxicity Score out of 100. Tell them HOW to fix this specific weakness. Respond entirely in ${lang === 'en' ? 'English' : 'Kurdish Sorani'}. Keep it to 3 harsh paragraphs.`;
 
-    try {
-      const result = await fetchWithRetry(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`,
-        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }
-      );
-      const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
-      setToxicityReport(text || "System error. Stop wasting time regardless.");
-    } catch (err) {
-      setToxicityReport("Connection failed. But you know you are wasting time.");
-    } finally {
-      setIsAiLoading(false);
-    }
+    const response = await callGeminiAPI(prompt, systemPrompt);
+    setToxicityReport(response);
+    setIsAiLoading(false);
   };
 
   // --- AI Interrogation ---
@@ -393,36 +345,17 @@ export default function App() {
     setAiResponse("");
 
     const totalWasted = Number(screenTime.social) + Number(screenTime.video) + Number(screenTime.game);
+    const systemPrompt = `You are an elite, brutal discipline coach. 
+    1. Destroy the user's excuses based on their report.
+    2. Give them a strict 3-step immediate action plan to build discipline based on their failure.
+    Respond in ${lang === 'en' ? 'English' : 'Kurdish Sorani'}. Be demanding and uncompromising.`;
 
-    const systemPrompt = `You are an elite, brutal discipline coach and behavioral analyst. 
-    1. Destroy the user's excuses and deeply analyze the root cause of their failure based on their report and background data.
-    2. Tell them exactly HOW to improve, build discipline, and rewire their habits based on this specific analysis.
-    3. Give a strict 3-step immediate action plan.
-    Respond in ${lang === 'en' ? 'English' : 'Kurdish Sorani'}. Be demanding, highly analytical, and uncompromising.`;
+    const userPrompt = `[BACKGROUND DATA] Drills Survived Today: ${dailyStats.drills} | Wasted Screen Time Logged: ${totalWasted} hours.
+    [USER REPORT] ${aiInput}`;
 
-    const userContextPrompt = `[BACKGROUND DATA]
-    - Drills Survived Today: ${drillsCompleted}
-    - Total Wasted Screen Time Logged: ${totalWasted} hours
-    
-    [USER REPORT]
-    ${aiInput}`;
-
-    const payload = {
-      contents: [{ parts: [{ text: userContextPrompt }] }],
-      systemInstruction: { parts: [{ text: systemPrompt }] }
-    };
-
-    try {
-      const result = await fetchWithRetry(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`,
-        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }
-      );
-      setAiResponse(result.candidates?.[0]?.content?.parts?.[0]?.text || "Failure.");
-    } catch (err) {
-      setAiResponse("Connection failed.");
-    } finally {
-      setIsAiLoading(false);
-    }
+    const response = await callGeminiAPI(userPrompt, systemPrompt);
+    setAiResponse(response);
+    setIsAiLoading(false);
   };
 
   const getDayProgress = () => {
@@ -435,14 +368,6 @@ export default function App() {
     const s = seconds % 60;
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
-
-  if (!user) {
-    return (
-      <div className="min-h-screen bg-black text-red-600 flex items-center justify-center font-mono uppercase tracking-widest text-sm font-black">
-        <Activity className="animate-pulse mr-3" /> {t.loginWait}
-      </div>
-    );
-  }
 
   return (
     <div 
@@ -493,8 +418,6 @@ export default function App() {
           {/* TAB 1: DASHBOARD */}
           {activeTab === 'dash' && (
             <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500 max-w-3xl mx-auto">
-              
-              {/* Permission Banner */}
               {!notificationsGranted && (
                 <div className="bg-orange-950/40 border border-orange-900/50 p-4 rounded-lg flex flex-col sm:flex-row items-center justify-between gap-4">
                   <div className="flex items-center gap-3 text-orange-400">
@@ -540,7 +463,7 @@ export default function App() {
               <div className="text-center w-full max-w-md">
                  <div className="inline-flex items-center gap-2 bg-red-950/30 px-5 py-2 rounded-full border border-red-900/50 mb-8 shadow-[0_0_15px_rgba(220,38,38,0.2)]">
                     <Flame size={18} className="text-red-500" />
-                    <span className="text-sm font-black text-red-500 uppercase tracking-widest">{t.sessionsCompleted}: {drillsCompleted}</span>
+                    <span className="text-sm font-black text-red-500 uppercase tracking-widest">{t.sessionsCompleted}: {dailyStats.drills}</span>
                  </div>
 
                 <div className="flex gap-2 mb-8 bg-black p-1.5 rounded border border-neutral-800">
@@ -608,7 +531,7 @@ export default function App() {
                   ) : (
                     tasks.map(task => (
                       <div key={task.id} className={`group flex items-center justify-between p-4 rounded border transition-all ${task.completed ? 'bg-neutral-950 border-neutral-900 opacity-30' : 'bg-neutral-900 border-neutral-800 hover:border-red-900'}`}>
-                        <div className="flex items-center gap-4 cursor-pointer flex-1" onClick={() => toggleTask(task)}>
+                        <div className="flex items-center gap-4 cursor-pointer flex-1" onClick={() => toggleTask(task.id)}>
                           <div className={`w-6 h-6 rounded flex flex-shrink-0 items-center justify-center transition-colors ${task.completed ? 'bg-red-900 text-black' : 'bg-black border border-neutral-700'}`}>
                             {task.completed && <CheckCircle2 size={16} />}
                           </div>
