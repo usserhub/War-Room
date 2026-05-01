@@ -8,7 +8,7 @@ import {
 
 // === 🛑 PASTE YOUR GOOGLE GEMINI API KEY HERE 🛑 ===
 // Get one for free at: https://aistudio.google.com/
-const GEMINI_API_KEY = ""; 
+const GEMINI_API_KEY = "AIzaSyBcksMBeZGPa28fPjS1683tJlJWXW_pcC8"; 
 
 // --- Custom Hook for Local Storage ---
 function useLocalStorage(key, initialValue) {
