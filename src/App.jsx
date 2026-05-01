@@ -6,18 +6,20 @@ import {
   Smartphone, BarChart3
 } from 'lucide-react';
 
-// === 🛑 PASTE YOUR GOOGLE GEMINI API KEY HERE 🛑 ===
-// Get one for free at: https://aistudio.google.com/
-const GEMINI_API_KEY = "AIzaSyBcksMBeZGPa28fPjS1683tJlJWXW_pcC8"; 
+// === 🛑 PASTE YOUR *NEW* GOOGLE GEMINI API KEY HERE 🛑 ===
+// Make sure to delete your old one from Google since it was leaked on GitHub!
+const GEMINI_API_KEY = ""; 
 
-// --- Custom Hook for Local Storage ---
+// --- Custom Hook for Local Storage (Bulletproofed) ---
 function useLocalStorage(key, initialValue) {
   const [storedValue, setStoredValue] = useState(() => {
     try {
       const item = window.localStorage.getItem(key);
-      return item ? JSON.parse(item) : initialValue;
+      if (!item) return initialValue;
+      const parsed = JSON.parse(item);
+      return parsed !== null && parsed !== undefined ? parsed : initialValue;
     } catch (error) {
-      console.error(error);
+      console.warn(`Storage error for ${key}, resetting.`, error);
       return initialValue;
     }
   });
@@ -147,10 +149,20 @@ const playHarshAlarm = () => {
 
 export default function App() {
   // --- Persistent Local State ---
-  const [lang, setLang] = useLocalStorage('warroom_lang', 'en');
-  const [tasks, setTasks] = useLocalStorage('warroom_tasks', []);
-  const [dailyStats, setDailyStats] = useLocalStorage('warroom_stats', { date: new Date().toDateString(), drills: 0 });
-  const [screenTime, setScreenTime] = useLocalStorage('warroom_screentime', { social: "", video: "", game: "" });
+  const [langRaw, setLang] = useLocalStorage('warroom_lang', 'en');
+  const [tasksRaw, setTasks] = useLocalStorage('warroom_tasks', []);
+  const [dailyStatsRaw, setDailyStats] = useLocalStorage('warroom_stats', { date: new Date().toDateString(), drills: 0 });
+  const [screenTimeRaw, setScreenTime] = useLocalStorage('warroom_screentime', { social: "", video: "", game: "" });
+  
+  // CRITICAL SAFETY CHECK: Prevent crashes if local storage data gets corrupted
+  const lang = TRANSLATIONS[langRaw] ? langRaw : 'en';
+  const tasks = Array.isArray(tasksRaw) ? tasksRaw : [];
+  const dailyStats = (dailyStatsRaw && typeof dailyStatsRaw === 'object' && dailyStatsRaw.date) 
+    ? dailyStatsRaw 
+    : { date: new Date().toDateString(), drills: 0 };
+  const screenTime = (screenTimeRaw && typeof screenTimeRaw === 'object') 
+    ? screenTimeRaw 
+    : { social: "", video: "", game: "" };
   
   // --- UI & Timer State ---
   const [activeTab, setActiveTab] = useState('dash'); 
@@ -179,14 +191,14 @@ export default function App() {
     if (dailyStats.date !== new Date().toDateString()) {
       setDailyStats({ date: new Date().toDateString(), drills: 0 });
     }
-  }, [dailyStats, setDailyStats]);
+  }, [dailyStats.date, setDailyStats]);
 
   // --- Toast Manager ---
   const showToast = useCallback((message, type = 'error') => {
     const id = Date.now();
     setToasts(prev => [...prev, { id, message, type }]);
     setTimeout(() => {
-      setToasts(prev => prev.filter(t => t.id !== id));
+      setToasts(prev => prev.filter(toast => toast.id !== id));
     }, 4000);
   }, []);
 
@@ -252,7 +264,7 @@ export default function App() {
     if (timerMode === 'focus') {
       sendPushNotification(t.appTitle, t.drillComplete);
       showToast(t.drillComplete, "success");
-      setDailyStats(prev => ({ ...prev, drills: prev.drills + 1 }));
+      setDailyStats(prev => ({ ...prev, drills: (prev.drills || 0) + 1 }));
       setTimerMode('break');
       setTimeLeft(5 * 60);
     } else {
@@ -272,11 +284,11 @@ export default function App() {
   };
 
   const toggleTask = (id) => {
-    setTasks(tasks.map(t => t.id === id ? { ...t, completed: !t.completed } : t));
+    setTasks(tasks.map(task => task.id === id ? { ...task, completed: !task.completed } : task));
   };
 
   const deleteTask = (id) => {
-    setTasks(tasks.filter(t => t.id !== id));
+    setTasks(tasks.filter(task => task.id !== id));
   };
 
   const toggleFullscreen = () => {
@@ -326,9 +338,9 @@ export default function App() {
     setToxicityReport("");
     
     const prompt = `The user has wasted the following hours today:
-    Social Media: ${screenTime.social} hrs
-    Video/Streaming: ${screenTime.video} hrs
-    Gaming: ${screenTime.game} hrs
+    Social Media: ${screenTime.social || 0} hrs
+    Video/Streaming: ${screenTime.video || 0} hrs
+    Gaming: ${screenTime.game || 0} hrs
     Total: ${total} hrs.`;
 
     const systemPrompt = `Act as a brutal, military-style discipline coach. Tear apart their screen time usage. Explain the long term damage this is doing to their life, brain, and goals. Give them a Toxicity Score out of 100. Tell them HOW to fix this specific weakness. Respond entirely in ${lang === 'en' ? 'English' : 'Kurdish Sorani'}. Keep it to 3 harsh paragraphs.`;
